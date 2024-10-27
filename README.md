@@ -1,12 +1,12 @@
-# pyUDP
+# pyAUDP (Python Asynchronous UDP)
 
-**pyUDP** is a Python library for implementing asynchronous User Datagram Protocol (UDP)
+**pyAUDP** is a Python library for implementing asynchronous User Datagram Protocol (UDP)
 functionalities over Python Socket object.
 
 ## Installation
 
-To install pyUDP, run the following command:
+To install pyAUDP, run the following command:
 
 ```bash
-python3 -m pip install pyUDP
+python3 -m pip install pyAUDP
 

@@ -1,6 +1,6 @@
 [project]
-name = "pyUDP"
-description = "A pure Python UDP module"
+name = "pyAUDP"
+description = "A pure Python asynchronous UDP module"
 readme = "README.md"
 
 dynamic = ["version"]
@@ -14,14 +14,12 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: Unix",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Threading",
-    "Topic :: Internet :: Communication Protocols",
     "Topic :: System :: Networking",
 ]
 
@@ -34,14 +32,14 @@ maintainers = [
 ]
 
 [project.urls]
-repository = "https://github.com/SzewczykW/pyUDP"
+repository = "https://github.com/SzewczykW/pyAUDP"
 
 [build-system]
 requires = ["setuptools>=58.1.0", "setuptools-scm>=6.0.1" ,"wheel>=0.36.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["pyUDP"]
+py-modules = ["pyAUDP"]
 
 [tool.setuptools_scm]
 version_scheme = "post-release"
