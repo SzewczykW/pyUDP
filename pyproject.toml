@@ -1,0 +1,53 @@
+[project]
+name = "pyUDP"
+description = "A pure Python UDP module"
+readme = "README.md"
+
+dynamic = ["version"]
+
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Natural Language :: English",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Threading",
+    "Topic :: Internet :: Communication Protocols",
+    "Topic :: System :: Networking",
+]
+
+authors = [
+    {name = "Wiktor Szewczyk", email = "szewczykwikp@gmail.com"},
+]
+
+maintainers = [
+    {name = "Wiktor Szewczyk", email = "szewczykwikp@gmail.com"},
+]
+
+[project.urls]
+repository = "https://github.com/SzewczykW/pyUDP"
+
+[build-system]
+requires = ["setuptools>=58.1.0", "setuptools-scm>=6.0.1" ,"wheel>=0.36.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["pyUDP"]
+
+[tool.setuptools_scm]
+version_scheme = "post-release"
+local_scheme = "no-local-version"
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
