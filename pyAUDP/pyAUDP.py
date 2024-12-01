@@ -19,8 +19,8 @@ class UDP:
 
     def __init__(
         self,
+        local_address: Tuple[str, int],
         logger: Optional[logging.Logger] = None,
-        local_address: Tuple[str, int] = ("127.0.0.1", 8053),
         timeout: Optional[float] = None,
         rx_pkt_size: int = 1024,
     ):
@@ -33,7 +33,7 @@ class UDP:
         * `timeout` (float): Timout in secends for socket operations.
         * `rx_pkt_size` (int): Maximum packet size to be received.
         """
-        self.logger = logger or logging.getLogger(self.__name__)
+        self.logger = logger or logging.getLogger(f"UDP-{local_address[0]}:{local_address[1]}")
 
         self.local_address = local_address
 
@@ -127,11 +127,12 @@ class UDP:
                 "Cannot perform UDP action when threads are not running!"
             )
 
-        for _ in range(n):
-            # Do we need to yield n packets? What is use-case for this?
-            yield self._rx.get_pkt()
+        # for _ in range(n):
+        #     # Do we need to yield n packets? What is use-case for this?
+        #     yield self._rx.get_pkt()
+        return self._rx.get_pkt()
 
-    def send(self, pkt: Tuple[Optional[bytes], str]) -> None:
+    def send(self, pkt: Tuple[Optional[bytes], Tuple[str, int]]) -> None:
         """
         Send data by putting it in TX queue.
 
@@ -263,7 +264,7 @@ class UDP:
                     continue
             self.logger.debug("TX thread leaving")
 
-        def send_pkt(self, tx_pkt: Tuple[Optional[bytes], str]) -> None:
+        def send_pkt(self, tx_pkt: Tuple[Optional[bytes], Tuple[str, int]]) -> None:
             """
             Put packet into TX queue.
 
