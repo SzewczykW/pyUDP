@@ -7,7 +7,8 @@ from queue import Queue, Empty, Full
 
 class UDPCommunicationIsStopped(Exception):
     """
-    Excepction raised when trying to execute `UDP.recv()` or `UDP.sendto` when `UDP.__stop` is set.
+    Excepction raised when trying to execute `UDP.recv()` or `UDP.sendto` when
+    `UDP.__stop` is set.
     """
 
 
@@ -19,8 +20,8 @@ class UDP:
 
     def __init__(
         self,
+        local_address: Tuple[str, int],
         logger: Optional[logging.Logger] = None,
-        local_address: Tuple[str, int] = ("127.0.0.1", 8053),
         timeout: Optional[float] = None,
         rx_pkt_size: int = 1024,
     ):
@@ -28,12 +29,16 @@ class UDP:
         Initializes the UDP socket and starts RX and TX threads.
 
         Parameters:
-        * `logger` (Optional[logging.Logger]): Logger instance, creates one without filters if not provided.
-        * `local_address` (Tuple[str, int]): Tuple containing the local IPv4 address and port for binding UDP server socket.
+        * `logger` (Optional[logging.Logger]): Logger instance, creates one without
+          filters if not provided.
+        * `local_address` (Tuple[str, int]): Tuple containing the local IPv4 address
+          and port for binding UDP server socket.
         * `timeout` (float): Timout in secends for socket operations.
         * `rx_pkt_size` (int): Maximum packet size to be received.
         """
-        self.logger = logger or logging.getLogger(self.__name__)
+        self.logger = logger or logging.getLogger(
+            f"{self.__class__.__name__}-{local_address[0]}:{local_address[1]}"
+        )
 
         self.local_address = local_address
 
@@ -109,44 +114,52 @@ class UDP:
 
         self.logger.info("UDP started communication.")
 
-    def recv(self, n: int = 1) -> Optional[Tuple[bytes, ...]]:
+    def recv(self, block: bool = False, timeout: float = None) -> Optional[bytes]:
         """
         Receive data form RX queue.
 
         Parameters:
-        * `n` (int): Number of packets to pop from RX queue.
+        * `block` (bool): blocking flag for `_RX._rx_queue.get`.
+        * `timeout` (float): timeout value for `_RX._rx_queue.get`.
 
         Raises:
         * `UDPCommunicationIsStopped`: Exception when called and `self.__stop` is set.
 
         Returns:
-        * (Optional[Tuple[bytes, ...]]): Yielded received packet poped from RX queue.
+        * (Optional[Tuple[bytes, ...]]): Return received packet poped from RX queue.
         """
         if self.is_stopped():
             raise UDPCommunicationIsStopped(
                 "Cannot perform UDP action when threads are not running!"
             )
 
-        for _ in range(n):
-            # Do we need to yield n packets? What is use-case for this?
-            yield self._rx.get_pkt()
+        return self._rx.get_pkt(block, timeout)
 
-    def send(self, pkt: Tuple[Optional[bytes], str]) -> None:
+    def send(
+        self,
+        pkt: Tuple[Optional[bytes], Tuple[str, int]],
+        block: bool = True,
+        timeout: float = None,
+    ) -> None:
         """
         Send data by putting it in TX queue.
 
+        Parameters:
+        * `pkt`(Tuple[Optional[bytes], Tuple[str, int]]): Tuple containing message to be
+          sent(can be empty) and IPv4 address of receiver as `Tuple` of address as
+          first element and port as second.
+        * `block` (bool): blocking flag for `_TX._tx_queue.put`.
+        * `timeout` (float): timeout value for `_RX._rx_queue.put`.
+
         Raises:
         * `UDPCommunicationIsStopped`: Exception when called and `self.__stop` is set.
-
-        Parameters:
-        * `pkt`(Tuple[Optional[bytes], str]): Tuple containing message to be sent(can be empty) and IPv4 address of receiver as string.
         """
         if self.is_stopped():
             raise UDPCommunicationIsStopped(
                 "Cannot perform UDP action when threads are not running!"
             )
 
-        self._tx.send_pkt(pkt)
+        self._tx.send_pkt(pkt, block, timeout)
 
     class _RX(threading.Thread):
         """
@@ -195,7 +208,9 @@ class UDP:
             self._rx_queue.join()
             self.logger.debug("RX thread leaving")
 
-        def get_pkt(self) -> Optional[Tuple[bytes, ...]]:
+        def get_pkt(
+            self, block: bool = False, timeout: float = None
+        ) -> Optional[Tuple[bytes, ...]]:
             """
             Pop message from RX queue.
 
@@ -203,7 +218,7 @@ class UDP:
             * (Optional[Tuple[bytes, ...]]): Data received or None if queue is empty.
             """
             try:
-                data = self._rx_queue.get_nowait()
+                data = self._rx_queue.get(block, timeout)
                 self._rx_queue.task_done()
                 return data
             except Empty:
@@ -263,7 +278,12 @@ class UDP:
                     continue
             self.logger.debug("TX thread leaving")
 
-        def send_pkt(self, tx_pkt: Tuple[Optional[bytes], str]) -> None:
+        def send_pkt(
+            self,
+            tx_pkt: Tuple[Optional[bytes], Tuple[str, int]],
+            block: bool = True,
+            timeout: float = None,
+        ) -> None:
             """
             Put packet into TX queue.
 
@@ -271,6 +291,6 @@ class UDP:
             * `tx_pkt`(Tuple[Optional[bytes], str]): Tuple containing message to be sent(can be empty) and IPv4 address of receiver as string.
             """
             try:
-                self._tx_queue.put(tx_pkt)
+                self._tx_queue.put(tx_pkt, block, timeout)
             except Full:
                 self.logger.error("TX queue is full!")
