@@ -4,6 +4,8 @@ import threading
 from typing import Callable, Optional, Tuple, Union
 from queue import Queue, Empty, Full
 
+__all__ = ["UDP", "UDPCommunicationIsStopped"]
+
 
 class UDPCommunicationIsStopped(Exception):
     """
@@ -157,7 +159,9 @@ class UDP:
         * `TypeError`: if address components have wrong types.
         """
         if not isinstance(pkt, tuple) or len(pkt) != 2:
-            raise ValueError("Packet must be a tuple of (data: Union[bytes, bytearray], address: Tuple[str, int]).")
+            raise ValueError(
+                "Packet must be a tuple of (data: Union[bytes, bytearray], address: Tuple[str, int])."
+            )
 
         data, addr = pkt
         if not isinstance(addr, tuple) or len(addr) != 2:
