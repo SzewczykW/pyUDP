@@ -1,8 +1,11 @@
 import logging
 import socket
 import threading
-from typing import Callable, Optional, Tuple, Union
+
+from time import time_ns
 from queue import Queue, Empty, Full
+from typing import Callable, Optional, Tuple, Union
+
 
 __all__ = ["UDP", "UDPCommunicationIsStopped"]
 
@@ -23,8 +26,10 @@ class UDP:
     def __init__(
         self,
         local_address: Tuple[str, int],
+        rx_with_timestamps: bool = False,
         logger: Optional[logging.Logger] = None,
-        timeout: Optional[float] = None,
+        socket_timeout: Optional[float] = None,
+        socket_rx_buff_size: int = 750_000,
         rx_pkt_size: int = 1024,
     ):
         """
@@ -35,14 +40,22 @@ class UDP:
           filters if not provided.
         * `local_address` (Tuple[str, int]): Tuple containing the local IPv4 address
           and port for binding UDP server socket.
-        * `timeout` (float): Timout in secends for socket operations.
+        * `rx_with_timestamps` (bool): set `True` if `UDP._RX` thread should add
+          timestamps to received data.
+        * `socket_timeout` (float): Timout in secends for socket operations.
+        * `socket_rx_buff_size` (int): socket recv buffer size. If bigger than system
+          wide rmem_size_max then the rmem_size_max is set.
         * `rx_pkt_size` (int): Maximum packet size to be received.
         """
         self.logger = logger or logging.getLogger(
             f"{self.__class__.__name__}-{local_address[0]}:{local_address[1]}"
         )
+        if not logger:
+            self.logger.setLevel(logging.ERROR)
 
         self.local_address = local_address
+
+        self.rx_with_timestamps = rx_with_timestamps
 
         self.rx_pkt_size = rx_pkt_size
 
@@ -52,11 +65,13 @@ class UDP:
 
         self._socket.bind(local_address)
 
-        if timeout is not None:
-            self._socket.settimeout(timeout)
+        if socket_timeout is not None:
+            self._socket.settimeout(socket_timeout)
+
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, socket_rx_buff_size)
 
         self.logger.info(
-            f"UDP socket bound to {self.local_address} with timeout: {timeout}"
+            f"UDP socket bound to {self.local_address} with timeout: {socket_timeout}"
         )
 
         self.__stop = threading.Event()
@@ -108,7 +123,13 @@ class UDP:
         self.logger.info("Starting UDP communication...")
         self.__stop.clear()
 
-        self._rx = UDP._RX(self.logger, self._socket, self.is_stopped, self.rx_pkt_size)
+        self._rx = UDP._RX(
+            self.logger,
+            self._socket,
+            self.is_stopped,
+            self.rx_with_timestamps,
+            self.rx_pkt_size,
+        )
         self._tx = UDP._TX(self.logger, self._socket, self.is_stopped)
 
         self._rx.start()
@@ -116,7 +137,9 @@ class UDP:
 
         self.logger.info("UDP started communication.")
 
-    def recv(self, block: bool = False, timeout: float = None) -> Optional[bytes]:
+    def recv(
+        self, block: bool = False, timeout: float = None
+    ) -> Optional[Tuple[bytes, Optional[int]]]:
         """
         Receive data form RX queue.
 
@@ -128,7 +151,7 @@ class UDP:
         * `UDPCommunicationIsStopped`: Exception when called and `self.__stop` is set.
 
         Returns:
-        * (Optional[Tuple[bytes, ...]]): Return received packet poped from RX queue.
+        * (Optional[Tuple[bytes, Optional[int]]]): Return received packet poped from RX queue.
         """
         if self.is_stopped():
             raise UDPCommunicationIsStopped(
@@ -190,15 +213,18 @@ class UDP:
             logger: logging.Logger,
             socket: socket.socket,
             stop: Callable[[], bool],
+            with_timestamps: bool = False,
             pkt_size: int = 1024,
         ):
             """
             Initialize the RX thread.
 
             Parameters:
-            * `logger`(logging.Logger): Logger instance passed by primary UDP class object.
-            * `socket`(socket.socket): Python socket object instance passed by primary UDP class object.
-            * `pkt_size`(int): Maximum size of packet to be received.
+            * `logger` (logging.Logger): Logger instance passed by primary UDP class object.
+            * `socket` (socket.socket): Python socket object instance passed by primary UDP class object.
+            * `stop` (Callable[[], bool]): internal `UDP` method for thread communication when to stop.
+            * `with_timestamps` (bool): flag for adding timestamps to received data from socket.
+            * `pkt_size` (int): Maximum size of packet to be received.
             """
             super().__init__()
             self.__stop = stop
@@ -208,6 +234,7 @@ class UDP:
             self.logger = logger
 
             self.pkt_size = pkt_size
+            self.with_timestamps = with_timestamps
             self._rx_queue = Queue()
 
         def run(self) -> None:
@@ -218,10 +245,20 @@ class UDP:
             while not self.__stop():
                 try:
                     response = self._socket.recv(self.pkt_size)
-                    self._rx_queue.put_nowait(response)
-                except OSError:
+                    self._rx_queue.put_nowait(
+                        (
+                            response,
+                            (time_ns() if self.with_timestamps else None),
+                        )
+                    )
+                except OSError as e:
+                    self.logger.warning(
+                        "Socket probably timed out at receiving data. For more info check set logger to `INFO`."
+                    )
+                    self.logger.info("SOCKET_ERROR: {e}")
                     continue
                 except Full:
+                    self.logger.error("RX queue is full!")
                     continue
             self.logger.debug("Waiting for user to receive all packages from RX queue.")
             self._rx_queue.join()
@@ -229,19 +266,23 @@ class UDP:
 
         def get_pkt(
             self, block: bool = False, timeout: float = None
-        ) -> Optional[Tuple[bytes, ...]]:
+        ) -> Optional[Tuple[bytes, Optional[int]]]:
             """
             Pop message from RX queue.
 
+            Parameters:
+            * `block` (bool): blocking flag for `UDP._RX._rx_queue.get`.
+            * `timeout` (float): timeout value for `UDP._RX._rx_queue.get`.
+
             Returns:
-            * (Optional[Tuple[bytes, ...]]): Data received or None if queue is empty.
+            * (Optional[Tuple[bytes, Optional[int]]]): Data received or None if queue is empty.
             """
             try:
                 data = self._rx_queue.get(block, timeout)
                 self._rx_queue.task_done()
                 return data
             except Empty:
-                self.logger.debug("RX queue is empty, nothing to return")
+                self.logger.warning("RX queue is empty, nothing to return")
                 return None
 
     class _TX(threading.Thread):
@@ -261,6 +302,7 @@ class UDP:
             Parameters:
             * `logger`(logging.Logger): Logger instance passed by primary UDP class object.
             * `socket`(socket.socket): Python socket object instance passed by primary UDP class object.
+            * `stop` (Callable[[], bool]): internal `UDP` method for thread communication when to stop.
             """
             super().__init__()
             self.__stop = stop
@@ -285,12 +327,15 @@ class UDP:
                             f"Could not send message in full. Message sent: {data[:ret]}"
                         )
                     self.logger.debug(f"Sent message to {remote_address}")
-                except OSError:
+                except OSError as e:
+                    self.logger.error("Socket failed to send data.")
+                    self.logger.error("SOCKET_ERROR: {e}")
                     continue
                 except Empty:
+                    self.logger.info("Nothing to send, continuing.")
                     continue
                 except ValueError:
-                    self.logger.error(
+                    self.logger.critical(
                         f"Invalid structure in TX queue. Must be (data, remote_address). Dumping last added element"
                     )
                     _ = self._tx_queue.get_nowait()  # Dump invalid element
@@ -310,8 +355,10 @@ class UDP:
             * `tx_pkt` (Tuple[Union[bytes, bytearray], Tuple[str, int]]): Tuple containing message to be
               sent(can be empty) and Tuple with IPv4 address(str) of receiver as
               first element and port(int) as second.
+            * `block` (bool): blocking flag for `UDP._TX._tx_queue.put`.
+            * `timeout` (float): timeout value for `UDP._TX._tx_queue.put`.
             """
             try:
                 self._tx_queue.put(tx_pkt, block, timeout)
             except Full:
-                self.logger.error("TX queue is full!")
+                self.logger.critical("TX queue is full!")
