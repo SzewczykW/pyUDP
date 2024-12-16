@@ -7,13 +7,24 @@ from queue import SimpleQueue, Queue, Empty, Full
 from typing import Callable, Optional, Tuple, Union
 
 
-__all__ = ["UDP", "UDPCommunicationIsStopped"]
+__all__ = [
+    "UDP",
+    "UDPCommunicationIsStoppedException",
+    "UDPCommunicationIsAlreadyRunningException",
+]
 
 
-class UDPCommunicationIsStopped(Exception):
+class UDPCommunicationIsStoppedException(Exception):
     """
-    Excepction raised when trying to execute `UDP.recv()` or `UDP.sendto` when
+    Exception raised when trying to execute `UDP.sendto` or `UDP.stop` when
     `UDP.__stop` is set.
+    """
+
+
+class UDPCommunicationIsAlreadyRunningException(Exception):
+    """
+    Exception raised when trying to execute `UDP.start` when `UDP.start` was called
+    before without calling `UDP.stop`.
     """
 
 
@@ -29,8 +40,8 @@ class UDP:
         rx_with_timestamps: bool = False,
         logger: Optional[logging.Logger] = None,
         socket_timeout: Optional[float] = None,
-        socket_rx_buff_size: int = 750_000,
-        rx_pkt_size: int = 1024,
+        socket_rx_buff_size: int = 750_000,  # 75kB
+        rx_pkt_size: int = 1024,  # 1kiB
     ):
         """
         Initializes the UDP socket and starts RX and TX threads.
@@ -44,7 +55,7 @@ class UDP:
           timestamps to received data.
         * `socket_timeout` (float): Timout in secends for socket operations.
         * `socket_rx_buff_size` (int): socket recv buffer size. If bigger than system
-          wide rmem_size_max then the rmem_size_max is set.
+          wide recv_mem_size_max then the recv_mem_size_max is set.
         * `rx_pkt_size` (int): Maximum packet size to be received.
         """
         self.logger = logger or logging.getLogger(
@@ -52,6 +63,13 @@ class UDP:
         )
         if not logger:
             self.logger.setLevel(logging.ERROR)
+            formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel(logging.ERROR)
+            stream_handler.setFormatter(formatter)
+            self.logger.addHandler(stream_handler)
 
         self.local_address = local_address
 
@@ -68,11 +86,16 @@ class UDP:
         if socket_timeout is not None:
             self._socket.settimeout(socket_timeout)
 
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, socket_rx_buff_size)
+        self._socket.setsockopt(
+            socket.SOL_SOCKET, socket.SO_RCVBUF, socket_rx_buff_size
+        )
 
         self.logger.info(
             f"UDP socket bound to {self.local_address} with timeout: {socket_timeout}"
         )
+
+        self._rx = None
+        self._tx = None
 
         self.__stop = threading.Event()
 
@@ -94,33 +117,19 @@ class UDP:
         """
         return self.__stop.is_set()
 
-    def stop(self) -> None:
-        """
-        Stop the communication by deleting RX and TX thread objects. Can be started over again by
-        `self.set_start()`.
-        """
-        self.logger.info("Stopping UDP communication...")
-
-        self.__stop.set()
-
-        self.logger.debug("Waiting for RX thread to finish...")
-        self._rx.join()  # Wait for the RX thread to finish
-        self.logger.debug("RX thread finished")
-
-        self.logger.debug("Waiting for TX thread to finish...")
-        self._tx.join()  # Wait for the TX thread to finish
-        self.logger.debug("TX thread finished")
-
-        self._rx = None
-        self._tx = None
-
-        self.logger.info("Stopped UDP communication.")
-
     def start(self) -> None:
         """
         Start the UDP communication by creating RX and TX threads.
         """
         self.logger.info("Starting UDP communication...")
+
+        if (self._rx is not None and self._rx.is_alive()) and (
+            self._tx is not None and self._tx.is_alive()
+        ):
+            raise UDPCommunicationIsAlreadyRunningException(
+                "UDP communication is already running. If You want to restart it stop it before."
+            )
+
         self.__stop.clear()
 
         self._rx = UDP._RX(
@@ -137,6 +146,35 @@ class UDP:
 
         self.logger.info("UDP started communication.")
 
+    def stop(self) -> None:
+        """
+        Stop the communication by deleting RX and TX thread objects. Can be started over again by
+        `self.set_start()`.
+        """
+        self.logger.info("Stopping UDP communication...")
+
+        if (self._rx is None or not self._rx.is_alive()) and (
+            self._tx is None or not self._tx.is_alive()
+        ):
+            raise UDPCommunicationIsStoppedException(
+                "UDP communication is already stopped or was never started."
+            )
+
+        self.__stop.set()
+
+        self.logger.debug("Waiting for RX thread to finish...")
+        self._rx.join()  # Wait for the RX thread to finish
+        self.logger.debug("RX thread finished")
+
+        self.logger.debug("Waiting for TX thread to finish...")
+        self._tx.join()  # Wait for the TX thread to finish
+        self.logger.debug("TX thread finished")
+
+        self._rx = None
+        self._tx = None
+
+        self.logger.info("Stopped UDP communication.")
+
     def recv(
         self, block: bool = False, timeout: float = None
     ) -> Optional[Tuple[bytes, Optional[int]]]:
@@ -147,16 +185,9 @@ class UDP:
         * `block` (bool): blocking flag for `_RX._rx_queue.get`.
         * `timeout` (float): timeout value for `_RX._rx_queue.get`.
 
-        Raises:
-        * `UDPCommunicationIsStopped`: Exception when called and `self.__stop` is set.
-
         Returns:
         * (Optional[Tuple[bytes, Optional[int]]]): Return received packet poped from RX queue.
         """
-        if self.is_stopped():
-            raise UDPCommunicationIsStopped(
-                "Cannot perform UDP action when threads are not running!"
-            )
 
         return self._rx.get_pkt(block, timeout)
 
@@ -177,7 +208,7 @@ class UDP:
         * `timeout` (float): timeout value for `_RX._rx_queue.put`.
 
         Raises:
-        * `UDPCommunicationIsStopped`: when called and `self.__stop` is set.
+        * `UDPCommunicationIsStoppedException`: when called and `self.__stop` is set.
         * `ValueError`: if packet tuple is not properly structured.
         * `TypeError`: if address components have wrong types.
         """
@@ -197,7 +228,7 @@ class UDP:
             raise TypeError(f"Port must be an integer, got {type(port)}.")
 
         if self.is_stopped():
-            raise UDPCommunicationIsStopped(
+            raise UDPCommunicationIsStoppedException(
                 "Cannot perform UDP action when threads are not running!"
             )
 
@@ -323,7 +354,7 @@ class UDP:
                     data, remote_address = self._tx_queue.get_nowait()
                     ret = self._socket.sendto(data, remote_address)
                     if ret != len(data):
-                        self.logger.warning(
+                        self.logger.error(
                             f"Could not send message in full. Message sent: {data[:ret]}"
                         )
                     self.logger.debug(f"Sent message to {remote_address}")
@@ -332,7 +363,7 @@ class UDP:
                     self.logger.error(f"SOCKET_ERROR: {e}")
                     continue
                 except Empty:
-                    self.logger.info("Nothing to send, continuing.")
+                    self.logger.debug("Nothing to send, continuing.")
                     continue
                 except ValueError:
                     self.logger.critical(
